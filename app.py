@@ -10,11 +10,29 @@ st.markdown("Eksplorasi peta persaingan, formasi instansi, dan kualifikasi pendi
 # 2. Load Data dengan Cache & Optimasi Memori
 @st.cache_data
 def load_data():
-    # Saran: Gunakan file .parquet saat deploy ke GitHub agar jauh lebih ringan
-    # df = pd.read_parquet("tbl_cpns_formations.parquet") 
-    df = pd.read_csv("tbl_cpns_formations.csv")
+    # Daftar file yang sudah kita pecah
+    file_parts = [
+        "cpns_part_1.parquet", "cpns_part_2.parquet", 
+        "cpns_part_3.parquet", "cpns_part_4.parquet", 
+        "cpns_part_5.parquet"
+    ]
     
-    # Memastikan kolom numerik terbaca dengan benar untuk kalkulasi
+    # Membaca dan menggabungkan semua potongan data
+    df_list = []
+    for file in file_parts:
+        try:
+            df_list.append(pd.read_parquet(file))
+        except FileNotFoundError:
+            pass # Abaikan jika ada file yang belum ter-upload sempurna
+            
+    if not df_list:
+        st.error("File data tidak ditemukan. Pastikan file cpns_part sudah di-upload.")
+        st.stop()
+        
+    # Menjahit kembali datanya menjadi satu DataFrame utuh
+    df = pd.concat(df_list, ignore_index=True)
+    
+    # Memastikan kolom numerik terbaca dengan benar
     df['total_formation'] = pd.to_numeric(df['total_formation'], errors='coerce').fillna(0)
     df['total_applicants'] = pd.to_numeric(df['total_applicants'], errors='coerce').fillna(0)
     return df
