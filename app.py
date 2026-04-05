@@ -7,56 +7,55 @@ st.set_page_config(page_title="Dashboard Formasi CPNS", layout="wide")
 st.title("📊 Dashboard Analisis Formasi CPNS")
 st.markdown("Eksplorasi peta persaingan, formasi instansi, dan kualifikasi pendidikan.")
 
-# 2. Load Data dengan Cache & Optimasi Memori
+# 2. Load Data (Menggabungkan partikel file parquet)
 @st.cache_data
 def load_data():
-    # Daftar file yang sudah kita pecah
     file_parts = [
         "cpns_part_1.parquet", "cpns_part_2.parquet", 
         "cpns_part_3.parquet", "cpns_part_4.parquet", 
         "cpns_part_5.parquet"
     ]
     
-    # Membaca dan menggabungkan semua potongan data
     df_list = []
     for file in file_parts:
         try:
             df_list.append(pd.read_parquet(file))
         except FileNotFoundError:
-            pass # Abaikan jika ada file yang belum ter-upload sempurna
+            pass
             
     if not df_list:
-        st.error("File data tidak ditemukan. Pastikan file cpns_part sudah di-upload.")
+        st.error("File data tidak ditemukan. Pastikan file cpns_part sudah ada.")
         st.stop()
         
-    # Menjahit kembali datanya menjadi satu DataFrame utuh
     df = pd.concat(df_list, ignore_index=True)
-    
-    # Memastikan kolom numerik terbaca dengan benar
     df['total_formation'] = pd.to_numeric(df['total_formation'], errors='coerce').fillna(0)
     df['total_applicants'] = pd.to_numeric(df['total_applicants'], errors='coerce').fillna(0)
     return df
 
 with st.spinner('Memuat jutaan sel data...'):
-    try:
-        df = load_data()
-    except FileNotFoundError:
-        st.error("File data tidak ditemukan. Pastikan file berada di direktori yang sama.")
-        st.stop()
+    df = load_data()
 
-# 3. Sidebar: Filter Data
-st.sidebar.header("🔍 Filter Pencarian")
+# ==========================================
+# 3. FILTER PENCARIAN (Pindah ke Halaman Utama)
+# ==========================================
+st.markdown("### 🔍 Filter Pencarian")
 
-# Filter Instansi
+# Membuat 3 kolom agar letak filter sejajar ke samping
+col_filter1, col_filter2, col_filter3 = st.columns(3)
+
 instansi_unik = sorted(df['agency_name'].dropna().unique())
-pilihan_instansi = st.sidebar.multiselect("Pilih Instansi:", options=instansi_unik)
-
-# Filter Pendidikan
 pendidikan_unik = sorted(df['education_name'].dropna().unique())
-pilihan_pendidikan = st.sidebar.multiselect("Kualifikasi Pendidikan:", options=pendidikan_unik)
 
-# Filter Nama Jabatan (Pencarian Teks)
-cari_jabatan = st.sidebar.text_input("Cari Nama Jabatan (misal: PENATA LAYANAN):")
+with col_filter1:
+    pilihan_instansi = st.multiselect("Pilih Instansi:", options=instansi_unik)
+
+with col_filter2:
+    pilihan_pendidikan = st.multiselect("Kualifikasi Pendidikan:", options=pendidikan_unik)
+
+with col_filter3:
+    cari_jabatan = st.text_input("Cari Nama Jabatan (misal: PENATA LAYANAN):")
+
+st.divider() # Garis pembatas agar rapi
 
 # 4. Terapkan Filter ke Data
 df_filtered = df.copy()
@@ -68,8 +67,10 @@ if pilihan_pendidikan:
 if cari_jabatan:
     df_filtered = df_filtered[df_filtered['position_name'].str.contains(cari_jabatan, case=False, na=False)]
 
-# 5. Metrik Utama (KPI)
-st.markdown("### 📌 Ringkasan Data (Berdasarkan Filter)")
+# ==========================================
+# 5. METRIK & VISUALISASI
+# ==========================================
+st.markdown("### 📌 Ringkasan Data")
 col1, col2, col3 = st.columns(3)
 with col1:
     st.metric(label="Total Jabatan/Posisi", value=f"{len(df_filtered):,}")
@@ -78,14 +79,10 @@ with col2:
 with col3:
     st.metric(label="Total Pelamar Sementara", value=f"{int(df_filtered['total_applicants'].sum()):,}")
 
-st.divider()
-
-# 6. Visualisasi Interaktif
 st.markdown("### 📈 Peta Persaingan & Formasi")
 col_chart1, col_chart2 = st.columns(2)
 
 with col_chart1:
-    # Top 10 Instansi dengan Formasi Terbanyak
     top_instansi = df_filtered.groupby('agency_name')['total_formation'].sum().reset_index()
     top_instansi = top_instansi.sort_values(by='total_formation', ascending=False).head(10)
     
@@ -102,12 +99,11 @@ with col_chart1:
     st.plotly_chart(fig_instansi, use_container_width=True)
 
 with col_chart2:
-    # Scatter Plot: Formasi vs Pelamar (Tingkat Keketatan)
     fig_scatter = px.scatter(
         df_filtered, 
         x='total_formation', 
         y='total_applicants', 
-        color='formation_type_id', # Membedakan warna berdasarkan tipe formasi (Khusus/Umum)
+        color='formation_type_id',
         hover_data=['agency_name', 'position_name'],
         title="Distribusi Formasi vs Jumlah Pelamar",
         labels={'total_formation': 'Formasi Dibuka', 'total_applicants': 'Total Pelamar'},
@@ -118,13 +114,10 @@ with col_chart2:
 
 st.divider()
 
-# 7. Tabel Eksplorasi (Raw Data)
+# 6. Tabel Eksplorasi
 st.markdown("### 📋 Detail Formasi")
-# Memilih kolom yang paling relevan untuk ditampilkan agar tabel rapi
 kolom_tampil = [
     'agency_name', 'position_name', 'formation_name', 
     'education_name', 'total_formation', 'total_applicants'
 ]
-
-# Batasi tampilan tabel maksimum 1000 baris agar browser tidak berat
 st.dataframe(df_filtered[kolom_tampil].head(1000), use_container_width=True)
