@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import re # <-- Wajib ditambah untuk fitur pencarian cerdas
 
 # 1. Konfigurasi Halaman
 st.set_page_config(page_title="Dashboard Strategis CPNS", layout="wide")
 st.title("📊 Dashboard Analisis Strategis Formasi CPNS")
-st.markdown("Maksimalkan peluang lulus dengan analisis gaji, rasio keketatan, dan detail pekerjaan.")
+st.markdown("Temukan formasi yang tepat untuk jurusanmu beserta detail pekerjaannya.")
 
-# 2. Load Data & Data Engineering
+# 2. Load Data
 @st.cache_data
 def load_data():
     file_parts = [
@@ -16,12 +17,7 @@ def load_data():
         "cpns_part_5.parquet"
     ]
     
-    df_list = []
-    for f in file_parts:
-        try:
-            df_list.append(pd.read_parquet(f))
-        except FileNotFoundError:
-            pass
+    df_list = [pd.read_parquet(f) for f in file_parts if pd.io.common.file_exists(f)]
     
     if not df_list:
         st.error("Data tidak ditemukan. Pastikan file cpns_part sudah terunggah.")
@@ -29,105 +25,128 @@ def load_data():
         
     df = pd.concat(df_list, ignore_index=True)
     
-    # Cleaning Numerik
     df['total_formation'] = pd.to_numeric(df['total_formation'], errors='coerce').fillna(0)
     df['total_applicants'] = pd.to_numeric(df['total_applicants'], errors='coerce').fillna(0)
     df['salary_min'] = pd.to_numeric(df['salary_min'], errors='coerce').fillna(0)
     df['salary_max'] = pd.to_numeric(df['salary_max'], errors='coerce').fillna(0)
     
-    # 🛠️ PERBAIKAN BUG: Mengubah data kosong (NaN) menjadi teks agar tidak error saat di-sort
     df['education_name'] = df['education_name'].fillna("Tidak Ada Data").astype(str)
     df['agency_name'] = df['agency_name'].fillna("Tidak Ada Data").astype(str)
     df['job_description'] = df['job_description'].fillna("-").astype(str)
     
-    # Hitung Rasio Keketatan
-    df['ratio_keketatan'] = (df['total_applicants'] / df['total_formation'].replace(0, 1)).round(2)
+    df = df[(df['total_formation'] > 0) & (df['total_applicants'] >= 0)]
+    df['ratio_keketatan'] = (df['total_applicants'] / df['total_formation']).round(2)
     
     return df
 
 df = load_data()
 
-# 3. Filter Utama (URUTAN DIUBAH)
-st.markdown("### 🔍 Filter Pencarian Strategis")
+# =======================================================
+# 3. FITUR BARU: EKSTRAKSI JURUSAN TUNGGAL
+# =======================================================
+@st.cache_data
+def get_unique_majors(dataframe):
+    # Memecah teks berdasarkan garis miring dan menghapus spasi ekstra
+    semua_jurusan = dataframe['education_name'].str.split(r'\s*/\s*').explode()
+    # Mengambil nilai unik, membuang data kosong, dan mengurutkan sesuai abjad
+    jurusan_bersih = sorted(semua_jurusan[semua_jurusan != "Tidak Ada Data"].unique())
+    return jurusan_bersih
+
+jurusan_unik = get_unique_majors(df)
+
+# 4. Filter Utama
+st.markdown("### 🔍 Cari Berdasarkan Kualifikasimu")
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    # Filter Pendidikan menjadi yang pertama
-    pendidikan_unik = sorted(df['education_name'].unique())
-    pendidikan = st.multiselect("Kualifikasi Pendidikan (Jurusan):", options=pendidikan_unik)
+    # Sekarang dropdown akan berisi jurusan murni secara alfabetis!
+    pendidikan = st.multiselect("Kualifikasi Pendidikan (Bisa pilih >1):", options=jurusan_unik)
     
 with c2:
-    # Filter Instansi menjadi yang kedua
-    instansi_unik = sorted(df['agency_name'].unique())
-    instansi = st.multiselect("Pilih Instansi:", options=instansi_unik)
+    instansi = st.multiselect("Pilih Instansi (Opsional):", options=sorted(df['agency_name'].unique()))
     
 with c3:
     max_salary_limit = int(df['salary_max'].max()) if df['salary_max'].max() > 0 else 20000000
     filter_gaji = st.slider("Minimal Gaji Max (Rp):", 0, max_salary_limit, 0, step=500000)
 
-# Terapkan logika filter
+# =======================================================
+# 5. LOGIKA FILTER CERDAS
+# =======================================================
 df_filtered = df.copy()
+
 if pendidikan:
-    df_filtered = df_filtered[df_filtered['education_name'].isin(pendidikan)]
+    # Trik Regex: Mencari jurusan persis sama, tidak tercampur dengan kata yang mirip
+    # (?:\b|^) memastikan batas kata, mencegah "MATEMATIKA" matching dengan "PENDIDIKAN MATEMATIKA"
+    pattern = '|'.join([f'(^|/)\\s*{re.escape(p)}\\s*(/|$)' for p in pendidikan])
+    df_filtered = df_filtered[df_filtered['education_name'].str.contains(pattern, regex=True, na=False)]
+
 if instansi:
     df_filtered = df_filtered[df_filtered['agency_name'].isin(instansi)]
 df_filtered = df_filtered[df_filtered['salary_max'] >= filter_gaji]
 
 st.divider()
 
-# 4. Insight Penting
-st.markdown("### 📌 Insight Penting")
+# 6. Insight Penting
+st.markdown("### 📌 Ringkasan Peluang")
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Total Formasi", f"{int(df_filtered['total_formation'].sum()):,}")
-m2.metric("Rata-rata Gaji Max", f"Rp {df_filtered['salary_max'].mean():,.0f}")
-m3.metric("Keketatan Tertinggi", f"{df_filtered['ratio_keketatan'].max()}x")
-m4.metric("Instansi Terpilih", f"{df_filtered['agency_name'].nunique()}")
+m1.metric("Total Posisi Tersedia", f"{len(df_filtered):,}")
+m2.metric("Total Kuota (Formasi)", f"{int(df_filtered['total_formation'].sum()):,}")
+m3.metric("Rata-rata Gaji Max", f"Rp {df_filtered['salary_max'].mean():,.0f}" if not df_filtered.empty else "Rp 0")
+m4.metric("Keketatan Tertinggi", f"{df_filtered['ratio_keketatan'].max()}x" if not df_filtered.empty else "0x")
 
-# 5. Visualisasi Lanjutan
+# 7. Visualisasi (Anti Rusak)
 st.markdown("### 📈 Analisis Kesejahteraan vs Persaingan")
 col_a, col_b = st.columns(2)
 
 with col_a:
     top_10_instansi = df_filtered.groupby('agency_name')['salary_max'].mean().nlargest(10).index
-    df_box = df_filtered[df_filtered['agency_name'].isin(top_10_instansi)]
+    df_box = df_filtered[df_filtered['agency_name'].isin(top_10_instansi)].copy()
+    
     if not df_box.empty:
-        fig_box = px.box(df_box, x="agency_name", y="salary_max", 
-                         title="Sebaran Gaji Maksimum (Top 10 Instansi Terfilter)",
-                         labels={'salary_max': 'Gaji Maksimum (Rp)', 'agency_name': 'Instansi'})
+        df_box['agency_short'] = df_box['agency_name'].apply(lambda x: x[:25] + '...' if len(x) > 25 else x)
+        fig_box = px.box(df_box, x="agency_short", y="salary_max", 
+                         title="Sebaran Gaji Max (Top 10 Instansi)",
+                         labels={'salary_max': 'Gaji Max (Rp)', 'agency_short': 'Instansi'})
         st.plotly_chart(fig_box, use_container_width=True)
     else:
-        st.info("Grafik gaji akan muncul setelah data dipilih.")
+        st.info("Pilih jurusanmu terlebih dahulu untuk melihat sebaran gaji.")
 
 with col_b:
     if not df_filtered.empty:
         fig_scatter = px.scatter(df_filtered, x="ratio_keketatan", y="salary_max",
                                  size="total_formation", color="agency_name",
-                                 hover_data=['position_name'],
-                                 title="Hubungan Keketatan vs Gaji",
-                                 labels={'ratio_keketatan': 'Rasio Keketatan', 'salary_max': 'Gaji Max'})
+                                 hover_data=['position_name', 'agency_name'],
+                                 title="Keketatan vs Gaji",
+                                 labels={'ratio_keketatan': 'Keketatan (Pelamar/Formasi)', 'salary_max': 'Gaji Max'})
+        fig_scatter.update_layout(showlegend=False)
         st.plotly_chart(fig_scatter, use_container_width=True)
     else:
-        st.info("Grafik persaingan akan muncul setelah data dipilih.")
+        st.info("Pilih jurusanmu terlebih dahulu untuk memetakan persaingan.")
 
-# 6. Tabel Detail yang Lebih Kaya
-st.markdown("### 📋 Detail Formasi & Deskripsi Pekerjaan")
-st.info("💡 Scroll tabel ke kanan untuk melihat Deskripsi Pekerjaan secara lengkap.")
+# 8. Tabel Detail Interaktif (Super Lengkap)
+st.markdown("### 📋 Detail Formasi, Gaji & Deskripsi Pekerjaan")
+st.info("💡 Klik baris tabel untuk menyeleksi, atau geser kolom ke kanan untuk melihat Job Description.")
 
-# Menambahkan job_description ke dalam daftar yang ditampilkan
 kolom_view = [
     'agency_name', 'position_name', 'education_name', 
     'salary_min', 'salary_max', 'total_formation', 
     'total_applicants', 'ratio_keketatan', 
-    'job_description' # <--- Deskripsi ditambahkan di sini
+    'job_description'
 ]
 
 st.dataframe(
     df_filtered[kolom_view].sort_values('salary_max', ascending=False), 
     use_container_width=True,
+    hide_index=True,
     column_config={
+        "agency_name": "Instansi",
+        "position_name": "Nama Jabatan",
+        "education_name": "Kualifikasi (Semua Jurusan Diterima)",
         "salary_min": st.column_config.NumberColumn("Gaji Min", format="Rp %d"),
         "salary_max": st.column_config.NumberColumn("Gaji Max", format="Rp %d"),
+        "total_formation": "Kuota",
+        "total_applicants": "Pelamar",
         "ratio_keketatan": st.column_config.NumberColumn("Keketatan", format="%.2f x"),
-        "job_description": st.column_config.TextColumn("Deskripsi Pekerjaan", width="large"), # Memberikan ruang lebar untuk teks panjang
+        "job_description": st.column_config.TextColumn("Detail Pekerjaan", width="large"),
     }
 )
