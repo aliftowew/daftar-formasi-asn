@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import re # <-- Wajib ditambah untuk fitur pencarian cerdas
+import re
 
 # 1. Konfigurasi Halaman
 st.set_page_config(page_title="Dashboard Strategis CPNS", layout="wide")
 st.title("📊 Dashboard Analisis Strategis Formasi CPNS")
 st.markdown("Temukan formasi yang tepat untuk jurusanmu beserta detail pekerjaannya.")
 
-# 2. Load Data
+# 2. Load Data (Optimasi RAM Maksimal)
 @st.cache_data
 def load_data():
     file_parts = [
@@ -30,9 +30,6 @@ def load_data():
         
     df = pd.concat(df_list, ignore_index=True)
     
-    # ==========================================
-    # OPTIMASI MEMORI (DIET RAM)
-    # ==========================================
     # 1. Buang kolom yang tidak dipakai di dashboard agar RAM lega
     kolom_penting = [
         'agency_name', 'position_name', 'education_name', 
@@ -42,11 +39,6 @@ def load_data():
     kolom_tersedia = [k for k in kolom_penting if k in df.columns]
     df = df[kolom_tersedia]
     
-    # 2. Ubah tipe data string ke tipe 'category' (Sangat hemat memori)
-    for col in ['agency_name', 'position_name']:
-        if col in df.columns:
-            df[col] = df[col].astype('category')
-            
     # Cleaning Numerik
     df['total_formation'] = pd.to_numeric(df['total_formation'], errors='coerce').fillna(0)
     df['total_applicants'] = pd.to_numeric(df['total_applicants'], errors='coerce').fillna(0)
@@ -55,26 +47,37 @@ def load_data():
     
     df['education_name'] = df['education_name'].fillna("Tidak Ada Data").astype(str)
     
-    # Mencegah error NaN pada kolom yang mungkin tidak ada
     if 'job_description' in df.columns:
         df['job_description'] = df['job_description'].fillna("-").astype(str)
+
+    # 2. Ubah tipe data string ke tipe 'category' (Sangat hemat memori)
+    for col in ['agency_name', 'position_name']:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
+            
     if 'agency_name' in df.columns:
-        df['agency_name'] = df['agency_name'].cat.add_categories(["Tidak Ada Data"]).fillna("Tidak Ada Data")
+        # Perbaikan Bug Kategori: Cek dulu apakah kategori sudah ada sebelum ditambahkan
+        if "Tidak Ada Data" not in df['agency_name'].cat.categories:
+            df['agency_name'] = df['agency_name'].cat.add_categories(["Tidak Ada Data"])
+        df['agency_name'] = df['agency_name'].fillna("Tidak Ada Data")
     
     df = df[(df['total_formation'] > 0) & (df['total_applicants'] >= 0)]
     df['ratio_keketatan'] = (df['total_applicants'] / df['total_formation']).round(2)
     
     return df
 
+df = load_data()
+
 # =======================================================
-# 3. FITUR BARU: EKSTRAKSI JURUSAN TUNGGAL
+# 3. FITUR BARU: EKSTRAKSI JURUSAN TUNGGAL (RAM DIET)
 # =======================================================
 @st.cache_data
 def get_unique_majors(dataframe):
-    # Memecah teks berdasarkan garis miring dan menghapus spasi ekstra
-    semua_jurusan = dataframe['education_name'].str.split(r'\s*/\s*').explode()
-    # Mengambil nilai unik, membuang data kosong, dan mengurutkan sesuai abjad
-    jurusan_bersih = sorted(semua_jurusan[semua_jurusan != "Tidak Ada Data"].unique())
+    # TRIK ANTI-OOM: Ekstrak nilai mentah uniknya DULU agar array menyusut drastis, 
+    # baru dipecah (split) dan di-explode. Memangkas proses dari 1 juta baris menjadi beberapa ribu baris saja.
+    unik_mentah = pd.Series(dataframe['education_name'].unique())
+    semua_jurusan = unik_mentah.str.split(r'\s*/\s*').explode()
+    jurusan_bersih = sorted(semua_jurusan[semua_jurusan != "Tidak Ada Data"].dropna().unique())
     return jurusan_bersih
 
 jurusan_unik = get_unique_majors(df)
@@ -84,7 +87,6 @@ st.markdown("### 🔍 Cari Berdasarkan Kualifikasimu")
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    # Sekarang dropdown akan berisi jurusan murni secara alfabetis!
     pendidikan = st.multiselect("Kualifikasi Pendidikan (Bisa pilih >1):", options=jurusan_unik)
     
 with c2:
@@ -95,18 +97,17 @@ with c3:
     filter_gaji = st.slider("Minimal Gaji Max (Rp):", 0, max_salary_limit, 0, step=500000)
 
 # =======================================================
-# 5. LOGIKA FILTER CERDAS
+# 5. LOGIKA FILTER CERDAS (Tanpa df.copy yang makan memori)
 # =======================================================
-df_filtered = df.copy()
+df_filtered = df # <-- Gunakan referensi langsung, BUKAN .copy()
 
 if pendidikan:
-    # Trik Regex: Mencari jurusan persis sama, tidak tercampur dengan kata yang mirip
-    # (?:\b|^) memastikan batas kata, mencegah "MATEMATIKA" matching dengan "PENDIDIKAN MATEMATIKA"
     pattern = '|'.join([f'(^|/)\\s*{re.escape(p)}\\s*(/|$)' for p in pendidikan])
     df_filtered = df_filtered[df_filtered['education_name'].str.contains(pattern, regex=True, na=False)]
 
 if instansi:
     df_filtered = df_filtered[df_filtered['agency_name'].isin(instansi)]
+
 df_filtered = df_filtered[df_filtered['salary_max'] >= filter_gaji]
 
 st.divider()
@@ -124,17 +125,18 @@ st.markdown("### 📈 Analisis Kesejahteraan vs Persaingan")
 col_a, col_b = st.columns(2)
 
 with col_a:
-    top_10_instansi = df_filtered.groupby('agency_name')['salary_max'].mean().nlargest(10).index
+    # Memastikan observed=True agar aman pada tipe data category
+    top_10_instansi = df_filtered.groupby('agency_name', observed=True)['salary_max'].mean().nlargest(10).index
     df_box = df_filtered[df_filtered['agency_name'].isin(top_10_instansi)].copy()
     
     if not df_box.empty:
-        df_box['agency_short'] = df_box['agency_name'].apply(lambda x: x[:25] + '...' if len(x) > 25 else x)
+        df_box['agency_short'] = df_box['agency_name'].astype(str).apply(lambda x: x[:25] + '...' if len(x) > 25 else x)
         fig_box = px.box(df_box, x="agency_short", y="salary_max", 
                          title="Sebaran Gaji Max (Top 10 Instansi)",
                          labels={'salary_max': 'Gaji Max (Rp)', 'agency_short': 'Instansi'})
         st.plotly_chart(fig_box, use_container_width=True)
     else:
-        st.info("Pilih jurusanmu terlebih dahulu untuk melihat sebaran gaji.")
+        st.info("Pilih filter terlebih dahulu untuk melihat sebaran gaji.")
 
 with col_b:
     if not df_filtered.empty:
@@ -146,7 +148,7 @@ with col_b:
         fig_scatter.update_layout(showlegend=False)
         st.plotly_chart(fig_scatter, use_container_width=True)
     else:
-        st.info("Pilih jurusanmu terlebih dahulu untuk memetakan persaingan.")
+        st.info("Pilih filter terlebih dahulu untuk memetakan persaingan.")
 
 # 8. Tabel Detail Interaktif (Super Lengkap)
 st.markdown("### 📋 Detail Formasi, Gaji & Deskripsi Pekerjaan")
