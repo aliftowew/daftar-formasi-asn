@@ -17,29 +17,54 @@ def load_data():
         "cpns_part_5.parquet"
     ]
     
-    df_list = [pd.read_parquet(f) for f in file_parts if pd.io.common.file_exists(f)]
-    
+    df_list = []
+    for f in file_parts:
+        try:
+            df_list.append(pd.read_parquet(f))
+        except FileNotFoundError:
+            pass
+            
     if not df_list:
         st.error("Data tidak ditemukan. Pastikan file cpns_part sudah terunggah.")
         st.stop()
         
     df = pd.concat(df_list, ignore_index=True)
     
+    # ==========================================
+    # OPTIMASI MEMORI (DIET RAM)
+    # ==========================================
+    # 1. Buang kolom yang tidak dipakai di dashboard agar RAM lega
+    kolom_penting = [
+        'agency_name', 'position_name', 'education_name', 
+        'salary_min', 'salary_max', 'total_formation', 
+        'total_applicants', 'job_description'
+    ]
+    kolom_tersedia = [k for k in kolom_penting if k in df.columns]
+    df = df[kolom_tersedia]
+    
+    # 2. Ubah tipe data string ke tipe 'category' (Sangat hemat memori)
+    for col in ['agency_name', 'position_name']:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
+            
+    # Cleaning Numerik
     df['total_formation'] = pd.to_numeric(df['total_formation'], errors='coerce').fillna(0)
     df['total_applicants'] = pd.to_numeric(df['total_applicants'], errors='coerce').fillna(0)
     df['salary_min'] = pd.to_numeric(df['salary_min'], errors='coerce').fillna(0)
     df['salary_max'] = pd.to_numeric(df['salary_max'], errors='coerce').fillna(0)
     
     df['education_name'] = df['education_name'].fillna("Tidak Ada Data").astype(str)
-    df['agency_name'] = df['agency_name'].fillna("Tidak Ada Data").astype(str)
-    df['job_description'] = df['job_description'].fillna("-").astype(str)
+    
+    # Mencegah error NaN pada kolom yang mungkin tidak ada
+    if 'job_description' in df.columns:
+        df['job_description'] = df['job_description'].fillna("-").astype(str)
+    if 'agency_name' in df.columns:
+        df['agency_name'] = df['agency_name'].cat.add_categories(["Tidak Ada Data"]).fillna("Tidak Ada Data")
     
     df = df[(df['total_formation'] > 0) & (df['total_applicants'] >= 0)]
     df['ratio_keketatan'] = (df['total_applicants'] / df['total_formation']).round(2)
     
     return df
-
-df = load_data()
 
 # =======================================================
 # 3. FITUR BARU: EKSTRAKSI JURUSAN TUNGGAL
