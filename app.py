@@ -23,13 +23,17 @@ def load_data():
         'total_formation', 'total_applicants', 'job_description'
     ]
     
-    df_list = []
+df_list = []
     for f in file_parts:
         try:
             temp_df = pd.read_parquet(f, columns=kolom_penting)
             df_list.append(temp_df)
         except FileNotFoundError:
+            # Mengabaikan jika file memang belum di-upload
             pass
+        except Exception as e:
+            # JIKA FILE KORUP, TAMPILKAN PERINGATAN TAPI APLIKASI TETAP JALAN
+            st.warning(f"⚠️ Peringatan: File {f} korup atau gagal terbaca dan akan dilewati.")
             
     if not df_list:
         st.error("Data tidak ditemukan. Pastikan file cpns_part sudah terunggah.")
