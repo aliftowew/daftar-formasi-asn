@@ -8,7 +8,7 @@ st.set_page_config(page_title="Dashboard Strategis ASN", layout="wide")
 st.title("📊 Dashboard Analisis Strategis Formasi CPNS & PPPK")
 st.markdown("Temukan formasi yang tepat, lihat detail gaji, dan analisis tren kuota dari tahun ke tahun.")
 
-# 2. Load Data (Ultra Diet RAM)
+# 2. Load Data (Ultra Diet RAM & Anti File Korup)
 @st.cache_data
 def load_data():
     file_parts = [
@@ -23,20 +23,19 @@ def load_data():
         'total_formation', 'total_applicants', 'job_description'
     ]
     
-df_list = []
+    df_list = []
     for f in file_parts:
         try:
             temp_df = pd.read_parquet(f, columns=kolom_penting)
             df_list.append(temp_df)
         except FileNotFoundError:
-            # Mengabaikan jika file memang belum di-upload
             pass
         except Exception as e:
-            # JIKA FILE KORUP, TAMPILKAN PERINGATAN TAPI APLIKASI TETAP JALAN
-            st.warning(f"⚠️ Peringatan: File {f} korup atau gagal terbaca dan akan dilewati.")
+            # Jika file korup, tampilkan peringatan di layar tapi aplikasi tetap jalan
+            st.warning(f"⚠️ File {f} korup atau gagal terbaca dan akan dilewati.")
             
     if not df_list:
-        st.error("Data tidak ditemukan. Pastikan file cpns_part sudah terunggah.")
+        st.error("Data tidak ditemukan. Pastikan file cpns_part sudah terunggah dengan benar.")
         st.stop()
         
     df = pd.concat(df_list, ignore_index=True)
@@ -92,7 +91,6 @@ st.markdown("### 🔍 Cari Formasi Anda")
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    # Menggunakan multiselect: Bertindak sebagai search box + multiple checkbox
     pendidikan = st.multiselect("🎓 Cari & Pilih Jurusan (Bisa >1):", options=jurusan_unik)
     
 with c2:
@@ -161,7 +159,7 @@ def tampilkan_detail(data_detail, df_full):
                 template="plotly_white"
             )
             fig.update_traces(textposition='outside')
-            fig.update_xaxes(dtick=1) # Memastikan tahun tidak desimal
+            fig.update_xaxes(dtick=1)
             st.plotly_chart(fig, use_container_width=True)
 
 # Membuat Tab
@@ -171,7 +169,6 @@ tab1, tab2 = st.tabs(["🏛️ Formasi CPNS", "💼 Formasi PPPK"])
 with tab1:
     st.markdown(f"**Total Ditemukan: {len(df_cpns):,} Formasi CPNS**")
     if not df_cpns.empty:
-        # Sortir alfabetis agar mudah dicari
         df_cpns_view = df_cpns.sort_values(['agency_name', 'position_name']).reset_index(drop=True)
         
         event_cpns = st.dataframe(
@@ -186,7 +183,6 @@ with tab1:
             }
         )
         
-        # Pemicu Detail
         if len(event_cpns.selection.rows) > 0:
             baris_terpilih = event_cpns.selection.rows[0]
             data_detail = df_cpns_view.iloc[baris_terpilih]
